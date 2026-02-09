@@ -1,71 +1,31 @@
-import {
-  type Message,
-  convertToCoreMessages,
-  createDataStreamResponse,
-  smoothStream,
-  streamText,
-} from 'ai';
+import OpenAI from "openai";
+import { NextResponse } from "next/server";
 
-import { customModel } from '@/lib/ai';
-import { models } from '@/lib/ai/models';
-import { regularPrompt } from '@/lib/ai/prompts';
-import { getWeather } from '@/lib/ai/tools/get-weather';
-import { generateUUID, getMostRecentUserMessage } from '@/lib/utils';
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
-export const maxDuration = 60;
+export async function POST(req: Request) {
+  try {
+    const { messages } = await req.json();
 
-type AllowedTools = 'getWeather';
+    const completion = await client.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages,
+      temperature: 0.7,
+    });
 
-const weatherTools: AllowedTools[] = ['getWeather'];
-const allTools: AllowedTools[] = [...weatherTools];
+    const reply = completion.choices[0].message?.content ?? "";
 
-export async function POST(request: Request) {
-  const {
-    id,
-    messages,
-    modelId,
-  }: { id: string; messages: Array<Message>; modelId: string } =
-    await request.json();
-
-  const model = models.find((model) => model.id === modelId);
-
-  if (!model) {
-    return new Response('Model not found', { status: 404 });
+    return NextResponse.json({
+      role: "assistant",
+      content: reply,
+    });
+  } catch (error) {
+    console.error("Chat API error:", error);
+    return NextResponse.json(
+      { error: "Chat failed" },
+      { status: 500 }
+    );
   }
-
-  const coreMessages = convertToCoreMessages(messages);
-  const userMessage = getMostRecentUserMessage(coreMessages);
-
-  if (!userMessage) {
-    return new Response('No user message found', { status: 400 });
-  }
-
-  const userMessageId = generateUUID();
-
-  return createDataStreamResponse({
-    execute: (dataStream) => {
-      dataStream.writeData({
-        type: 'user-message-id',
-        content: userMessageId,
-      });
-
-      const result = streamText({
-        model: customModel(model.apiIdentifier),
-        system: regularPrompt,
-        messages: coreMessages,
-        maxSteps: 5,
-        experimental_activeTools: allTools,
-        experimental_transform: smoothStream({ chunking: 'word' }),
-        tools: {
-          getWeather,
-        },
-        experimental_telemetry: {
-          isEnabled: true,
-          functionId: 'stream-text',
-        },
-      });
-
-      result.mergeIntoDataStream(dataStream);
-    },
-  });
 }
